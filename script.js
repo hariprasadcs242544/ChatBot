@@ -1,31 +1,52 @@
+/* ─── script.js — Gemini Chat ──────────────────────────────────────────────
+   Put your Gemini API key below.
+   Get one for free at: https://aistudio.google.com/app/apikey
+   ───────────────────────────────────────────────────────────────────────── */
 const GEMINI_API_KEY = "AQ.Ab8RN6KM5FwrP_1ndGBzmeyNNuM-T9BmBPlv-LQ1X6BzELWoTQ";
-const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash"];
 
-const SYSTEM_INSTRUCTION =
-  "You are My Assistant. Speak in a warm, natural, human-like way: friendly, concise, and conversational. Avoid robotic filler phrases like 'As an AI' or 'Certainly! Here is...'. Use clean markdown when helpful for formatting, lists, or code. Be direct and honest whenever you are uncertain about something.";
+const API_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent";
 
-// Conversation state in Gemini REST API format
-let conversationHistory = [];
-let isSending = false;
+const SYSTEM_INSTRUCTION = {
+  parts: [
+    {
+      text: `You are a helpful, knowledgeable, and friendly AI assistant called My Assistant.
+You communicate clearly and concisely. When appropriate, you:
+- Use markdown formatting (bold, inline code, code blocks) to make responses easier to read.
+- Break complex explanations into steps or bullet points.
+- Acknowledge when you're uncertain rather than guessing.
+- Keep a warm, approachable tone without being overly casual.
+Always strive to give accurate, useful, and thoughtful responses.`,
+    },
+  ],
+};
 
-// DOM Elements
-const chatMain = document.getElementById("chat-main");
-const messagesList = document.getElementById("messages-list");
-const emptyState = document.getElementById("empty-state");
-const chatForm = document.getElementById("chat-form");
-const messageInput = document.getElementById("message-input");
-const sendBtn = document.getElementById("send-btn");
-const newChatBtn = document.getElementById("new-chat-btn");
-const starterCards = document.querySelectorAll(".starter-prompt-card");
+/* ─────────────────────────────────────────────────────────────────────────
+   State
+   ───────────────────────────────────────────────────────────────────────── */
+let conversationHistory = []; // Array of { role: "user"|"model", parts:[{text}] }
+let isWaiting = false;
 
-/* ==========================================================================
-   Markdown Parsing & Sanitization
-   ========================================================================== */
+/* ─────────────────────────────────────────────────────────────────────────
+   DOM References
+   ───────────────────────────────────────────────────────────────────────── */
+const dom = {
+  messages: document.getElementById("messages"),
+  emptyState: document.getElementById("emptyState"),
+  userInput: document.getElementById("userInput"),
+  sendBtn: document.getElementById("sendBtn"),
+  typingIndicator: document.getElementById("typingIndicator"),
+  newChatBtn: document.getElementById("newChatBtn"),
+  newChatBtnTop: document.getElementById("newChatBtnTop"),
+  sidebarToggle: document.getElementById("sidebarToggle"),
+  sidebar: document.getElementById("sidebar"),
+  topbarTitle: document.querySelector(".topbar-title"),
+};
 
-/**
- * Escapes raw text to prevent HTML injection (XSS protection).
- */
-function escapeHTML(str) {
+/* ─────────────────────────────────────────────────────────────────────────
+   Markdown Renderer (safe – HTML-first escape)
+   ───────────────────────────────────────────────────────────────────────── */
+function escapeHtml(str) {
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -34,485 +55,352 @@ function escapeHTML(str) {
     .replace(/'/g, "&#39;");
 }
 
-/**
- * Safely converts Markdown to HTML:
- * Escapes HTML first, then handles code blocks, inline code, bold, and paragraphs.
- */
-function renderMarkdown(rawText) {
-  if (!rawText) return "";
-
-  // 1. Strictly escape HTML first (XSS prevention)
-  let text = escapeHTML(rawText);
-
-  // 2. Extract code blocks with placeholders
+function renderMarkdown(raw) {
+  // 1. Extract code blocks first (preserve them, don't escape inner content)
   const codeBlocks = [];
-  text = text.replace(/```([a-zA-Z0-9_-]*)\r?\n?([\s\S]*?)```/g, (match, lang, code) => {
-    const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
-    codeBlocks.push({
-      lang: lang.trim(),
-      code: code.trim()
-    });
-    return `\n\n${placeholder}\n\n`;
+  let text = raw.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push({ lang: lang.trim(), code });
+    return `\x00CODE_BLOCK_${idx}\x00`;
   });
 
-  // 3. Inline code (`code`)
-  text = text.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>');
+  // 2. Escape HTML in the remaining text
+  text = escapeHtml(text);
 
-  // 4. Bold formatting (**text** or __text__)
-  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+  // 3. Inline code (backticks)
+  text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-  // Helper to build code block HTML
-  const formatCodeBlock = (block) => {
-    const langLabel = block.lang || "code";
-    return `
-      <div class="code-block-wrapper">
-        <div class="code-block-header">
-          <span class="code-lang">${langLabel}</span>
-          <button class="btn-copy-code" type="button" aria-label="Copy code block">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            <span>Copy</span>
-          </button>
-        </div>
-        <pre><code>${block.code}</code></pre>
-      </div>
-    `.trim();
-  };
+  // 4. Bold **text**
+  text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
-  // 5. Paragraphs, Lists & Blocks
-  const chunks = text
-    .split(/\n{2,}/)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
+  // 5. Italic *text* (single asterisk, not followed by another)
+  text = text.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 
-  let html = chunks
-    .map((chunk) => {
-      // Check code block placeholder
-      const codeMatch = chunk.match(/^__CODE_BLOCK_(\d+)__$/);
-      if (codeMatch) {
-        const index = parseInt(codeMatch[1], 10);
-        return formatCodeBlock(codeBlocks[index]);
-      }
+  // 6. Restore code blocks
+  text = text.replace(/\x00CODE_BLOCK_(\d+)\x00/g, (_, idx) => {
+    const { lang, code } = codeBlocks[Number(idx)];
+    const escapedCode = escapeHtml(code.replace(/^\n|\n$/g, ""));
+    const langLabel = lang
+      ? `<span class="code-lang">${escapeHtml(lang)}</span>`
+      : "";
+    return `<div class="code-block-wrapper">${langLabel}<pre><code>${escapedCode}</code></pre></div>`;
+  });
 
-      // Parse lines: handle text mixed with bullet lists and numbered lists
-      const lines = chunk.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      const blocks = [];
-      let currentList = null;
-
-      for (const line of lines) {
-        const bulletMatch = line.match(/^[-*]\s+(.*)/);
-        const numberMatch = line.match(/^\d+\.\s+(.*)/);
-
-        if (bulletMatch) {
-          if (!currentList || currentList.type !== "ul") {
-            if (currentList) blocks.push(currentList);
-            currentList = { type: "ul", items: [] };
-          }
-          currentList.items.push(bulletMatch[1]);
-        } else if (numberMatch) {
-          if (!currentList || currentList.type !== "ol") {
-            if (currentList) blocks.push(currentList);
-            currentList = { type: "ol", items: [] };
-          }
-          currentList.items.push(numberMatch[1]);
-        } else {
-          if (currentList) {
-            blocks.push(currentList);
-            currentList = null;
-          }
-          blocks.push({ type: "p", text: line });
-        }
-      }
-
-      if (currentList) blocks.push(currentList);
-
-      return blocks
-        .map((b) => {
-          if (b.type === "ul") {
-            return `<ul class="chat-list">${b.items.map((it) => `<li>${it}</li>`).join("")}</ul>`;
-          }
-          if (b.type === "ol") {
-            return `<ol class="chat-list">${b.items.map((it) => `<li>${it}</li>`).join("")}</ol>`;
-          }
-          return `<p>${b.text}</p>`;
-        })
-        .join("");
+  // 7. Paragraphs (double newline → paragraph break)
+  const paragraphs = text.split(/\n{2,}/);
+  text = paragraphs
+    .map((p) => {
+      const trimmed = p.trim();
+      if (!trimmed) return "";
+      // Don't wrap code-block-wrappers in <p>
+      if (trimmed.startsWith('<div class="code-block-wrapper">')) return trimmed;
+      // Single newlines become <br> inside paragraph
+      return "<p>" + trimmed.replace(/\n/g, "<br>") + "</p>";
     })
-    .join("");
+    .join("\n");
 
-  // Restore any nested code block placeholders
-  html = html.replace(/__CODE_BLOCK_(\d+)__/g, (match, indexStr) => {
-    const index = parseInt(indexStr, 10);
-    const block = codeBlocks[index];
-    return block ? formatCodeBlock(block) : "";
-  });
-
-  return html;
+  return text;
 }
 
-/* ==========================================================================
-   UI Helpers & Message Rendering
-   ========================================================================== */
-
-function scrollToBottom() {
-  const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  chatMain.scrollTo({
-    top: chatMain.scrollHeight,
-    behavior: prefersReduced ? "auto" : "smooth"
-  });
-}
-
+/* ─────────────────────────────────────────────────────────────────────────
+   UI Helpers
+   ───────────────────────────────────────────────────────────────────────── */
 function hideEmptyState() {
-  if (emptyState) {
-    emptyState.style.display = "none";
+  if (dom.emptyState && dom.emptyState.parentNode) {
+    dom.emptyState.remove();
   }
 }
 
 function showEmptyState() {
-  if (emptyState) {
-    emptyState.style.display = "flex";
-  }
+  dom.messages.innerHTML = "";
+  const emptyState = buildEmptyState();
+  dom.messages.appendChild(emptyState);
 }
 
-function setWaitingState(waiting) {
-  isSending = waiting;
-  messageInput.disabled = waiting;
-  sendBtn.disabled = waiting;
-  if (!waiting) {
-    messageInput.focus();
-  }
-}
-
-function appendUserMessage(text) {
-  hideEmptyState();
-
-  const row = document.createElement("div");
-  row.className = "message-row user";
-
-  const bubble = document.createElement("div");
-  bubble.className = "message-bubble user";
-  bubble.textContent = text; // Plain text escaping via textContent
-
-  row.appendChild(bubble);
-  messagesList.appendChild(row);
-  scrollToBottom();
-}
-
-function appendAssistantMessage(markdownText) {
-  hideEmptyState();
-
-  const row = document.createElement("div");
-  row.className = "message-row assistant";
-
-  const bubble = document.createElement("div");
-  bubble.className = "message-bubble assistant";
-  bubble.innerHTML = renderMarkdown(markdownText);
-
-  // Copy response button at bottom of bubble
-  const actions = document.createElement("div");
-  actions.className = "bubble-actions";
-  actions.innerHTML = `
-    <button type="button" class="btn-copy-bubble" title="Copy response" aria-label="Copy response">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-      <span>Copy</span>
-    </button>
-  `;
-  bubble.appendChild(actions);
-
-  row.appendChild(bubble);
-  messagesList.appendChild(row);
-  scrollToBottom();
-}
-
-function showTypingIndicator() {
-  removeTypingIndicator();
-
-  const row = document.createElement("div");
-  row.id = "typing-indicator";
-  row.className = "message-row assistant";
-  row.setAttribute("aria-live", "polite");
-  row.innerHTML = `
-    <div class="message-bubble assistant typing-bubble" aria-label="My Assistant is thinking">
-      <div class="typing-dots">
-        <span></span>
-        <span></span>
-        <span></span>
-      </div>
+function buildEmptyState() {
+  const div = document.createElement("div");
+  div.className = "empty-state";
+  div.id = "emptyState";
+  div.innerHTML = `
+    <div class="empty-state-icon" aria-hidden="true">
+      <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+        <circle cx="28" cy="28" r="28" fill="url(#esGrad2a)"/>
+        <path d="M28 14C28 14 18 20 18 28C18 34 22.5 39 28 39C33.5 39 38 34 38 28C38 20 28 14 28 14Z" fill="white" opacity="0.85"/>
+        <path d="M28 22C28 22 22 26 22 29.5C22 32.2 24.7 34.5 28 34.5C31.3 34.5 34 32.2 34 29.5C34 26 28 22 28 22Z" fill="url(#esGrad2b)"/>
+        <defs>
+          <linearGradient id="esGrad2a" x1="0" y1="0" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#4F8EF7"/><stop offset="1" stop-color="#7C3AED"/>
+          </linearGradient>
+          <linearGradient id="esGrad2b" x1="22" y1="22" x2="34" y2="34.5" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#4F8EF7"/><stop offset="1" stop-color="#7C3AED"/>
+          </linearGradient>
+        </defs>
+      </svg>
+    </div>
+    <h2 class="empty-state-title">How can I help you today?</h2>
+    <p class="empty-state-sub">Ask me anything — My Assistant is here to help.</p>
+    <div class="starter-prompts" role="list" aria-label="Suggested conversation starters">
+      <button class="starter-prompt" role="listitem" data-prompt="Explain quantum computing in simple terms that a high school student can understand.">
+        <span class="starter-icon" aria-hidden="true">⚛️</span>
+        <span>Explain quantum computing simply</span>
+      </button>
+      <button class="starter-prompt" role="listitem" data-prompt="Write a short Python function that checks if a string is a palindrome, with comments explaining each step.">
+        <span class="starter-icon" aria-hidden="true">🐍</span>
+        <span>Write a Python palindrome checker</span>
+      </button>
+      <button class="starter-prompt" role="listitem" data-prompt="What are the top 5 productivity tips backed by science? Format them as a numbered list with a brief explanation for each.">
+        <span class="starter-icon" aria-hidden="true">🧠</span>
+        <span>Top science-backed productivity tips</span>
+      </button>
     </div>
   `;
-  messagesList.appendChild(row);
-  scrollToBottom();
+  // Attach starter-prompt listeners
+  div.querySelectorAll(".starter-prompt").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const prompt = btn.dataset.prompt;
+      dom.userInput.value = prompt;
+      autoGrow(dom.userInput);
+      updateSendBtn();
+      sendMessage();
+    });
+  });
+  return div;
 }
 
-function removeTypingIndicator() {
-  const indicator = document.getElementById("typing-indicator");
-  if (indicator) {
-    indicator.remove();
-  }
-}
-
-function appendErrorMessage(title, details) {
+function appendMessage(role, htmlContent, isError = false) {
   hideEmptyState();
 
-  const errorRow = document.createElement("div");
-  errorRow.className = "message-row assistant";
+  const row = document.createElement("div");
+  row.className = `message-row ${role}${isError ? " error" : ""}`;
 
-  const errorCard = document.createElement("div");
-  errorCard.className = "message-error";
-  errorCard.setAttribute("role", "alert");
-  errorCard.innerHTML = `
-    <div class="error-icon" aria-hidden="true">⚠️</div>
-    <div class="error-body">
-      <strong>${escapeHTML(title)}</strong>
-      <p>${details}</p>
-    </div>
-  `;
+  const avatar = document.createElement("div");
+  avatar.className = "message-avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.textContent = role === "user" ? "U" : "G";
 
-  errorRow.appendChild(errorCard);
-  messagesList.appendChild(errorRow);
+  const bubble = document.createElement("div");
+  bubble.className = "message-bubble";
+  bubble.innerHTML = htmlContent;
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+
+  dom.messages.appendChild(row);
   scrollToBottom();
+  return row;
 }
 
-/* ==========================================================================
-   API Communication & Fallback
-   ========================================================================== */
+function scrollToBottom() {
+  dom.messages.scrollTo({ top: dom.messages.scrollHeight, behavior: "smooth" });
+}
 
-/**
- * Sends a message and attempts models in sequence.
- * Handles 404/429 fallback and removes failed turn from history on error.
- */
-async function sendMessage(userText) {
-  if (isSending) return;
+function setTyping(visible) {
+  dom.typingIndicator.hidden = !visible;
+  if (visible) scrollToBottom();
+}
 
-  const trimmedText = userText.trim();
-  if (!trimmedText) return;
+function setInputDisabled(disabled) {
+  isWaiting = disabled;
+  dom.userInput.disabled = disabled;
+  dom.sendBtn.disabled = disabled || dom.userInput.value.trim() === "";
+}
 
-  // Render user turn in UI
-  appendUserMessage(trimmedText);
+function updateSendBtn() {
+  dom.sendBtn.disabled = isWaiting || dom.userInput.value.trim() === "";
+}
 
-  // Push user turn to conversation history
-  conversationHistory.push({
-    role: "user",
-    parts: [{ text: trimmedText }]
+/* ─────────────────────────────────────────────────────────────────────────
+   Auto-grow textarea
+   ───────────────────────────────────────────────────────────────────────── */
+function autoGrow(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 200) + "px";
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   API Call
+   ───────────────────────────────────────────────────────────────────────── */
+async function callGeminiAPI(history, attempt = 1) {
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      system_instruction: SYSTEM_INSTRUCTION,
+      contents: history,
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 8192,
+      },
+    }),
   });
 
-  // Verify API Key
-  const isKeyMissing =
-    !GEMINI_API_KEY ||
-    GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE" ||
-    GEMINI_API_KEY.trim() === "";
+  // Retry once on 429 / 503 (high demand / rate limit)
+  if ((response.status === 429 || response.status === 503) && attempt === 1) {
+    await new Promise((r) => setTimeout(r, 3000)); // wait 3s then retry
+    return callGeminiAPI(history, 2);
+  }
 
-  if (isKeyMissing) {
-    // Remove the failed user turn from history so retrying works
-    conversationHistory.pop();
-    appendErrorMessage(
-      "API Key Missing",
-      "Please open <code>script.js</code> and replace <code>YOUR_GEMINI_API_KEY_HERE</code> at the top of the file with your Gemini API key."
+  if (!response.ok) {
+    let errMsg = `API error ${response.status}`;
+    try {
+      const errJson = await response.json();
+      const detail = errJson?.error?.message;
+      if (detail) errMsg = detail;
+    } catch (_) { /* ignore */ }
+    throw new Error(errMsg);
+  }
+
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Empty response from My Assistant.");
+  return text;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Send Message
+   ───────────────────────────────────────────────────────────────────────── */
+async function sendMessage() {
+  const userText = dom.userInput.value.trim();
+  if (!userText || isWaiting) return;
+
+  // Check API key
+  if (!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
+    appendMessage(
+      "bot",
+      `<p>⚠️ <strong>API key missing.</strong> Please open <code>script.js</code> and replace <code>YOUR_GEMINI_API_KEY_HERE</code> with your <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Gemini API key</a>.</p>`,
+      true
     );
-    setWaitingState(false);
     return;
   }
 
-  setWaitingState(true);
-  showTypingIndicator();
+  // Clear input
+  dom.userInput.value = "";
+  autoGrow(dom.userInput);
+  updateSendBtn();
 
-  let replyText = null;
-  let lastError = null;
-
-  for (let i = 0; i < MODELS.length; i++) {
-    const model = MODELS[i];
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
-          },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: SYSTEM_INSTRUCTION }]
-            },
-            contents: conversationHistory
-          })
-        }
-      );
-
-      // Model fallback condition: 404 Not Found or 429 Rate Limit
-      if (response.status === 404 || response.status === 429) {
-        lastError = new Error(`Model ${model} returned HTTP ${response.status}`);
-        continue; // Try next model in sequence
-      }
-
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => null);
-        const apiMsg =
-          errJson?.error?.message ||
-          `HTTP ${response.status}: ${response.statusText || "Request failed"}`;
-        throw new Error(apiMsg);
-      }
-
-      const data = await response.json();
-      const candidate = data.candidates?.[0];
-      const parts = candidate?.content?.parts || [];
-      const extractedText = parts.map((p) => p.text || "").join("").trim();
-
-      if (!extractedText) {
-        throw new Error("The assistant returned an empty response.");
-      }
-
-      replyText = extractedText;
-      break; // Successfully received response
-    } catch (err) {
-      lastError = err;
-      // Network failure (e.g. offline) or invalid request error; break fallback
-      if (err instanceof TypeError || (err.message && !err.message.includes("404") && !err.message.includes("429"))) {
-        break;
-      }
-    }
+  // Update title on first message
+  if (conversationHistory.length === 0) {
+    dom.topbarTitle.textContent = userText.length > 50
+      ? userText.slice(0, 47) + "…"
+      : userText;
   }
 
-  removeTypingIndicator();
+  // Render user message
+  appendMessage("user", escapeHtml(userText).replace(/\n/g, "<br>"));
 
-  if (replyText !== null) {
-    // Append assistant response to history
-    conversationHistory.push({
-      role: "model",
-      parts: [{ text: replyText }]
-    });
-    appendAssistantMessage(replyText);
-  } else {
-    // Remove the failed user turn from history so retrying works
+  // Push to history
+  const userTurn = { role: "user", parts: [{ text: userText }] };
+  conversationHistory.push(userTurn);
+
+  // Show typing, disable input
+  setTyping(true);
+  setInputDisabled(true);
+
+  try {
+    const replyText = await callGeminiAPI(conversationHistory);
+
+    // Push model reply to history
+    conversationHistory.push({ role: "model", parts: [{ text: replyText }] });
+
+    setTyping(false);
+    appendMessage("bot", renderMarkdown(replyText));
+  } catch (err) {
+    // Remove failed user turn from history
     conversationHistory.pop();
 
-    let errorTitle = "Request Failed";
-    let errorDetails = lastError
-      ? escapeHTML(lastError.message)
-      : "Unable to contact the Gemini API. Please verify your connection and try again.";
-
-    if (lastError instanceof TypeError) {
-      errorTitle = "Network Error";
-      errorDetails = "Unable to connect to the Gemini API. Please check your internet connection.";
-    }
-
-    appendErrorMessage(errorTitle, errorDetails);
+    setTyping(false);
+    appendMessage(
+      "bot",
+      `<p>❌ <strong>Error:</strong> ${escapeHtml(err.message)}</p><p>Please check your API key and internet connection, then try again.</p>`,
+      true
+    );
+    console.error("[Gemini Chat]", err);
+  } finally {
+    setInputDisabled(false);
+    dom.userInput.focus();
   }
-
-  setWaitingState(false);
 }
 
-/* ==========================================================================
-   Event Listeners & Form Controls
-   ========================================================================== */
-
-// Auto-grow textarea as user types
-function resizeTextarea() {
-  messageInput.style.height = "auto";
-  const maxHeight = 180;
-  const newHeight = Math.min(messageInput.scrollHeight, maxHeight);
-  messageInput.style.height = `${newHeight}px`;
+/* ─────────────────────────────────────────────────────────────────────────
+   New Chat
+   ───────────────────────────────────────────────────────────────────────── */
+function startNewChat() {
+  conversationHistory = [];
+  isWaiting = false;
+  dom.typingIndicator.hidden = true;
+  dom.userInput.value = "";
+  autoGrow(dom.userInput);
+  updateSendBtn();
+  dom.topbarTitle.textContent = "New Conversation";
+  showEmptyState();
+  dom.userInput.focus();
 }
 
-messageInput.addEventListener("input", resizeTextarea);
+/* ─────────────────────────────────────────────────────────────────────────
+   Sidebar Toggle
+   ───────────────────────────────────────────────────────────────────────── */
+let sidebarOpen = true;
 
-// Enter sends, Shift+Enter adds new line
-messageInput.addEventListener("keydown", (e) => {
+function toggleSidebar() {
+  sidebarOpen = !sidebarOpen;
+  dom.sidebar.classList.toggle("collapsed", !sidebarOpen);
+  dom.sidebarToggle.setAttribute("aria-expanded", String(sidebarOpen));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Event Listeners
+   ───────────────────────────────────────────────────────────────────────── */
+
+// Send on Enter, Shift+Enter for newline
+dom.userInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    chatForm.requestSubmit();
+    sendMessage();
   }
 });
 
-// Form submit
-chatForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (isSending) return;
-
-  const text = messageInput.value.trim();
-  if (!text) return;
-
-  messageInput.value = "";
-  messageInput.style.height = "auto";
-  sendMessage(text);
+// Auto-grow + enable/disable send button
+dom.userInput.addEventListener("input", () => {
+  autoGrow(dom.userInput);
+  updateSendBtn();
 });
 
-// Starter prompt cards
-starterCards.forEach((card) => {
-  card.addEventListener("click", () => {
-    if (isSending) return;
-    const prompt = card.getAttribute("data-prompt");
-    if (prompt) {
-      sendMessage(prompt);
-    }
+// Send button click
+dom.sendBtn.addEventListener("click", sendMessage);
+
+// New chat buttons
+dom.newChatBtn.addEventListener("click", startNewChat);
+dom.newChatBtnTop.addEventListener("click", startNewChat);
+
+// Sidebar toggle
+dom.sidebarToggle.addEventListener("click", toggleSidebar);
+
+// Starter prompts (initial render from HTML)
+document.querySelectorAll(".starter-prompt").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const prompt = btn.dataset.prompt;
+    dom.userInput.value = prompt;
+    autoGrow(dom.userInput);
+    updateSendBtn();
+    sendMessage();
   });
 });
 
-// New Chat button: clears conversation and resets history
-newChatBtn.addEventListener("click", () => {
-  conversationHistory = [];
-  isSending = false;
+/* ─────────────────────────────────────────────────────────────────────────
+   Init
+   ───────────────────────────────────────────────────────────────────────── */
+(function init() {
+  autoGrow(dom.userInput);
+  updateSendBtn();
+  dom.userInput.focus();
 
-  // Clear messages from list
-  messagesList.innerHTML = "";
-  messagesList.appendChild(emptyState);
-  showEmptyState();
-
-  // Reset textarea
-  messageInput.value = "";
-  messageInput.style.height = "auto";
-  setWaitingState(false);
-  messageInput.focus();
-});
-
-// Delegated click handler for copy buttons (code blocks and bubble replies)
-messagesList.addEventListener("click", async (e) => {
-  // 1. Copy code block
-  const copyCodeBtn = e.target.closest(".btn-copy-code");
-  if (copyCodeBtn) {
-    const wrapper = copyCodeBtn.closest(".code-block-wrapper");
-    const codeEl = wrapper ? wrapper.querySelector("code") : null;
-    if (codeEl) {
-      try {
-        await navigator.clipboard.writeText(codeEl.innerText);
-        const span = copyCodeBtn.querySelector("span");
-        if (span) {
-          span.textContent = "Copied!";
-          copyCodeBtn.classList.add("copied");
-          setTimeout(() => {
-            span.textContent = "Copy";
-            copyCodeBtn.classList.remove("copied");
-          }, 1800);
-        }
-      } catch (err) {
-        console.warn("Clipboard copy error:", err);
-      }
-    }
-    return;
+  // On mobile: start with sidebar closed
+  if (window.innerWidth < 640) {
+    sidebarOpen = false;
+    dom.sidebar.classList.add("collapsed");
+    dom.sidebarToggle.setAttribute("aria-expanded", "false");
   }
-
-  // 2. Copy full assistant reply
-  const copyBubbleBtn = e.target.closest(".btn-copy-bubble");
-  if (copyBubbleBtn) {
-    const bubble = copyBubbleBtn.closest(".message-bubble.assistant");
-    if (bubble) {
-      // Clone bubble, remove actions bar, get text
-      const clone = bubble.cloneNode(true);
-      const actions = clone.querySelector(".bubble-actions");
-      if (actions) actions.remove();
-      try {
-        await navigator.clipboard.writeText(clone.innerText.trim());
-        const span = copyBubbleBtn.querySelector("span");
-        if (span) {
-          span.textContent = "Copied!";
-          setTimeout(() => {
-            span.textContent = "Copy";
-          }, 1800);
-        }
-      } catch (err) {
-        console.warn("Clipboard copy error:", err);
-      }
-    }
-  }
-});
-
+})();
