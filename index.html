@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="chat-card">
+    <header class="chat-header">
+      <div class="header-brand">
+        <div class="assistant-avatar" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a8 8 0 0 0-8 8c0 3.36 2.07 6.24 5 7.42V20a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2.58c2.93-1.18 5-4.06 5-7.42a8 8 0 0 0-8-8z"/>
+            <path d="M9 10h.01"/>
+            <path d="M15 10h.01"/>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <h1 class="brand-title">My Assistant</h1>
+          <div class="brand-status">
+            <span class="status-indicator"></span>
+            <span class="status-text">Ready</span>
+            <span class="model-badge">Gemini Flash</span>
+          </div>
+        </div>
+      </div>
+      <button type="button" id="new-chat-btn" class="btn-new-chat" aria-label="Start new chat" title="Start new chat">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+          <path d="M21 3v5h-5"/>
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+          <path d="M3 21v-5h5"/>
+        </svg>
+        <span>New chat</span>
+      </button>
+    </header>
+
+    <main class="chat-main" id="chat-main">
+      <div id="messages-list" class="messages-list" role="log" aria-live="polite">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+          <h2 class="empty-title">Hi, I'm My Assistant</h2>
+          <p class="empty-subtitle">How can I help you today? Pick a conversation starter below or ask anything you like.</p>
+          <div class="starter-prompts">
+            <button type="button" class="starter-prompt-card" data-prompt="Explain quantum computing in simple terms.">
+              <span class="starter-icon" aria-hidden="true">⚛️</span>
+              <span class="starter-text">Explain quantum computing in simple terms</span>
+              <span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" class="starter-prompt-card" data-prompt="Draft a polite and warm email asking a colleague for an update on a shared project.">
+              <span class="starter-icon" aria-hidden="true">✉️</span>
+              <span class="starter-text">Draft a polite project update email</span>
+              <span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" class="starter-prompt-card" data-prompt="Give me 5 creative, practical ideas to boost focus while studying or working.">
+              <span class="starter-icon" aria-hidden="true">💡</span>
+              <span class="starter-text">Give me 5 creative ideas to boost focus</span>
+              <span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="chat-footer">
+      <form id="chat-form" class="composer-form" autocomplete="off">
+        <div class="composer-wrapper">
+          <textarea
+            id="message-input"
+            class="composer-textarea"
+            placeholder="Type your message... (Shift+Enter for newline)"
+            rows="1"
+            aria-label="Your message"
+          ></textarea>
+          <button type="submit" id="send-btn" class="send-btn" aria-label="Send message" title="Send message">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <div class="composer-hint">Press Enter to send, Shift+Enter for new line</div>
+      </form>
+    </footer>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
